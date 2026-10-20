@@ -1,0 +1,38 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'kr.school.attendancerelay'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'kr.school.attendancerelay'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+    }
+
+    // 고정 서명 키: 빌드할 때마다 키가 바뀌면 업데이트 시 앱을 지웠다 다시 깔아야 해서 저장소에 포함함.
+    // (개인용 디버그 키라 저장소는 반드시 Private로 두세요)
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
