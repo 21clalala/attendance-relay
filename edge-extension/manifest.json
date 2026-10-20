@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "출결 연락 패널",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "우리반 출결 연락(문자·카톡)을 엣지 사이드 패널에서 바로 확인합니다.",
   "permissions": ["sidePanel", "storage"],
   "host_permissions": [

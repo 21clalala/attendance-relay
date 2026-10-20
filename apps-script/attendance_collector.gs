@@ -2,7 +2,8 @@
  * 우리반 출결 연락 자동 정리 (Google Apps Script)
  *
  * 흐름: 갤럭시 '출결 알림 전달기' 앱이 우리반 연락처의 문자/카톡 알림만 골라 POST
- *       → 발신자 이름에서 번호·이름·관계 해석 → 수신로그 기록 → 오늘현황 시트 갱신
+ *       → 발신자 이름에서 번호·이름·관계 해석 → 수신로그 기록
+ *       → 엣지 '출결 연락 패널'이 조회·확정·수정
  *
  * 연락처 이름 규칙 (선생님 폰)
  *   학생   : 2630201권민준
@@ -10,12 +11,13 @@
  *   (26=연도, 3=학년, 02=반, 01=번호)
  *
  * 처음 설정
- *  1) 아래 SECRET 값을 아무도 모르는 긴 문자열로 바꾸기 (앱에도 같은 값 입력)
+ *  1) 아래 SECRET 값을 아무도 모르는 긴 문자열로 바꾸기 (앱·패널에도 같은 값 입력)
  *  2) 편집기에서 setup 함수 실행(권한 승인)
  *  3) 배포 > 새 배포 > 유형: 웹 앱 / 실행: 나 / 액세스: 모든 사용자 → 웹 앱 URL 복사
+ *  ※ 코드를 고친 뒤에는 배포 > 배포 관리 > 연필 > 버전: 새 버전 > 배포 (URL 유지)
  *
  * 개인정보: 반 코드가 맞지 않는 발신자의 메시지는 저장하지 않고 버립니다.
- *          외부 AI 서비스로 아무것도 보내지 않으며, 유형/사유는 키워드 규칙으로만 '추정'합니다.
+ *          외부 AI 서비스로 아무것도 보내지 않으며, 유형/사유/날짜는 키워드 규칙으로만 '추정'합니다.
  */
 
 const CONFIG = {
@@ -26,11 +28,16 @@ const CONFIG = {
   TZ: 'Asia/Seoul',
 };
 
+const SCRIPT_VERSION = '2026-10-20c';
+
+// 열 순서를 바꾸지 말 것 (뒤에 추가만). 기존 시트는 setup/첫 실행 때 빠진 머리글을 자동으로 채움
 const LOG_HEADERS = ['수신시각', '날짜', '앱', '발신자', '번호', '이름', '관계',
-  '유형(추정)', '사유(추정)', '메모', '원문', '담임확인', 'ID', '유형(담임)', '사유(담임)'];
+  '유형(추정)', '사유(추정)', '메모', '원문', '담임확인', 'ID', '유형(담임)', '사유(담임)',
+  '적용날짜', '담임메모'];
 const TYPE_CHOICES = ['결석', '지각', '조퇴', '결과', '해당없음'];
 const REASON_CHOICES = ['질병', '미인정', '기타', '출석인정', ''];
 const COL = {}; LOG_HEADERS.forEach((h, i) => { COL[h] = i; });
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /* ---------- 초기 설정 ---------- */
 
@@ -51,12 +58,7 @@ function onOpen() {
 
 /* ---------- 수신 ---------- */
 
-const SCRIPT_VERSION = '2026-10-20b';
-
-/**
- * 브라우저로 웹 앱 URL을 열었을 때 보이는 상태 확인용.
- * 이 글이 보이면 '배포된 버전에 이 코드가 들어 있다'는 뜻. (비밀 정보는 내보내지 않음)
- */
+/** 브라우저로 웹 앱 URL을 열면 보이는 상태 확인용 (비밀 정보 없음) */
 function doGet() {
   return json_({ ok: true, service: '출결 연락 수집기', version: SCRIPT_VERSION,
     message: '정상 배포됨. 폰 앱과 엣지 패널에서 연결 테스트를 해 보세요.' });
@@ -64,17 +66,18 @@ function doGet() {
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
   try {
+    lock.waitLock(20000);
     const p = readParams_(e);
     if (p.secret !== CONFIG.SECRET) return json_({ ok: false, error: 'auth' });
-    if (String(p.test || '') === '1') return json_({ ok: true, test: true }); // 앱의 '연결 테스트'
+    if (String(p.test || '') === '1') return json_({ ok: true, test: true, version: SCRIPT_VERSION });
 
-    // 엣지 사이드 패널용
+    // ---- 엣지 사이드 패널용 ----
     if (p.action === 'list') {
-      return json_({ ok: true, date: p.date || todayStr_(), items: listItems_(p.date), roster: roster_() });
+      const d = DATE_RE.test(String(p.date || '')) ? p.date : todayStr_();
+      const r = listItems_(d);
+      return json_({ ok: true, date: d, items: r.items, notices: r.notices, roster: roster_() });
     }
-    // 패널에서 직접 추가 (PC 카톡에서 먼저 읽어 폰 알림이 안 온 경우 등)
     if (p.action === 'add') {
       const r = addManual_(p);
       if (r.error) return json_({ ok: false, error: r.error });
@@ -82,19 +85,21 @@ function doPost(e) {
       return json_({ ok: true, id: r.id });
     }
     if (p.action === 'check') {
-      const n = checkItems_(String(p.ids || '').split(',').filter(Boolean), String(p.value) !== 'false');
+      const n = checkItems_(ids_(p), String(p.value) !== 'false');
       return json_({ ok: true, updated: n });
     }
-    // 담임이 폰 알림/입력창(또는 패널)에서 유형·사유를 직접 지정
+    // 담임 확정·수정 (패널, 폰 알림/입력창). date·memo는 보낸 경우에만 바꿈
     if (p.action === 'settype') {
       const type = String(p.type || '');
       const reason = String(p.reason || '');
       if (TYPE_CHOICES.indexOf(type) < 0 || REASON_CHOICES.indexOf(reason) < 0) return json_({ ok: false, error: 'bad type' });
-      const n = setTypeItems_(String(p.ids || '').split(',').filter(Boolean), type, reason);
+      if (p.date !== undefined && p.date !== '' && !DATE_RE.test(String(p.date))) return json_({ ok: false, error: 'bad date' });
+      const n = setTypeItems_(ids_(p), type, reason, p.date || null, p.memo !== undefined ? String(p.memo) : null);
       refreshToday();
       return json_({ ok: true, updated: n });
     }
 
+    // ---- 폰 앱에서 온 메시지 ----
     const sender = String(p.sender || '').trim();
     const text = String(p.text || '').trim();
     const app = String(p.app || '').trim();
@@ -113,26 +118,28 @@ function doPost(e) {
     const ts = Number(p.ts);
     const when = ts > 0 && Math.abs(Date.now() - ts) < 3 * 24 * 3600 * 1000 ? new Date(ts) : new Date();
 
-    const saved = storeMessage_(app, sender, text, who, when);
+    const s = storeMessage_(app, sender, text, who, when);
     refreshToday();
-    // 폰 앱이 '유형 입력' 알림을 띄울 수 있도록 저장 결과를 돌려줌
-    return json_({ ok: true, stored: true, id: saved.id, no: who.no, name: who.name, rel: who.rel,
-      type: saved.type, reason: saved.reason });
+    // att=false(출결과 무관해 보임)면 폰 앱은 알림을 띄우지 않음
+    return json_({ ok: true, stored: true, id: s.id, no: who.no, name: who.name, rel: who.rel,
+      type: s.type, reason: s.reason, date: s.date, recvDate: s.recvDate, att: s.att });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
   } finally {
-    lock.releaseLock();
+    try { lock.releaseLock(); } catch (_) { /* 잠금을 못 얻은 경우 */ }
   }
 }
 
 function readParams_(e) {
-  // 앱은 폼 파라미터(x-www-form-urlencoded)로 보냄. JSON 본문도 받아 줌
+  // 앱·패널은 폼 파라미터(x-www-form-urlencoded)로 보냄. JSON 본문도 받아 줌
   if (e && e.parameter && e.parameter.secret) return e.parameter;
   if (e && e.postData && e.postData.contents) {
     try { return JSON.parse(e.postData.contents); } catch (_) { /* fallthrough */ }
   }
   return {};
 }
+
+function ids_(p) { return String(p.ids || '').split(',').filter(Boolean); }
 
 /**
  * '2630201권민준' → {no: 1, name: '권민준', rel: '학생'}
@@ -151,19 +158,28 @@ function parseSender_(sender) {
 }
 
 function storeMessage_(app, sender, text, who, when) {
-  const ss = SpreadsheetApp.getActive();
-  const log = ensureSheet_(ss, CONFIG.SHEET_LOG, LOG_HEADERS);
+  const log = ensureSheet_(SpreadsheetApp.getActive(), CONFIG.SHEET_LOG, LOG_HEADERS);
   const now = when || new Date();
+  const recvDate = Utilities.formatDate(now, CONFIG.TZ, 'yyyy-MM-dd');
   const c = classify_(text);
+  const t = detectTargetDate_(text, recvDate);
+  const memo = [c.memo, t.note].filter(Boolean).join(', ');
   const id = Utilities.getUuid().slice(0, 8);
   log.appendRow([
-    txt_(Utilities.formatDate(now, CONFIG.TZ, 'yyyy-MM-dd HH:mm:ss')),
-    txt_(Utilities.formatDate(now, CONFIG.TZ, 'yyyy-MM-dd')),
+    txt_(Utilities.formatDate(now, CONFIG.TZ, 'yyyy-MM-dd HH:mm:ss')), txt_(recvDate),
     app, txt_(sender), who.no, txt_(who.name), who.rel,
-    c.type, c.reason, c.memo, txt_(text), false, id, '', '',
+    c.type, c.reason, memo, txt_(text), false, id, '', '',
+    txt_(t.date), '',
   ]);
   log.getRange(log.getLastRow(), COL['담임확인'] + 1).insertCheckboxes();
-  return { id, type: c.type, reason: c.reason };
+  return { id, type: c.type, reason: c.reason, date: t.date, recvDate,
+    att: isAttendance_(c.type, c.reason, '') };
+}
+
+/** 출결 관련으로 볼지: 담임이 정했으면 그 값, 아니면 유형이나 사유 키워드가 잡혔는지 */
+function isAttendance_(type, reason, ctype) {
+  if (ctype) return ctype !== '해당없음';
+  return (type && type !== '확인필요') || !!reason;
 }
 
 /** 지금까지 받은 연락에서 번호 → 이름 목록을 만든다 (가장 최근 이름 우선) */
@@ -185,8 +201,9 @@ function addManual_(p) {
   const type = String(p.type || '');
   const reason = String(p.reason || '');
   if (TYPE_CHOICES.indexOf(type) < 0 || REASON_CHOICES.indexOf(reason) < 0) return { error: '유형/사유가 올바르지 않습니다' };
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || '')) ? p.date : todayStr_();
+  const date = DATE_RE.test(String(p.date || '')) ? p.date : todayStr_();
   const text = String(p.text || '').trim() || '(내용 없이 직접 추가)';
+  const recvDate = todayStr_();
   const time = Utilities.formatDate(new Date(), CONFIG.TZ, 'HH:mm:ss');
   const c = classify_(text);
   const id = Utilities.getUuid().slice(0, 8);
@@ -195,23 +212,27 @@ function addManual_(p) {
 
   const log = ensureSheet_(SpreadsheetApp.getActive(), CONFIG.SHEET_LOG, LOG_HEADERS);
   log.appendRow([
-    txt_(date + ' ' + time), txt_(date), '직접추가', txt_(sender), no, txt_(name), rel,
+    txt_(recvDate + ' ' + time), txt_(recvDate), '직접추가', txt_(sender), no, txt_(name), rel,
     c.type, c.reason, c.memo, txt_(text), false, id, type, reason,
+    txt_(date), txt_(String(p.memo || '')),
   ]);
   log.getRange(log.getLastRow(), COL['담임확인'] + 1).insertCheckboxes();
   return { id };
 }
 
-function setTypeItems_(ids, type, reason) {
+/** 담임 확정값 기록. date/memo가 null이면 기존 값 유지 */
+function setTypeItems_(ids, type, reason, date, memo) {
   if (!ids.length) return 0;
   const { log, rows } = logRows_();
   const want = new Set(ids);
   let n = 0;
   rows.forEach((r, i) => {
-    if (want.has(r[COL['ID']])) {
-      log.getRange(i + 2, COL['유형(담임)'] + 1, 1, 2).setValues([[type, reason]]);
-      n++;
-    }
+    if (!want.has(r[COL['ID']])) return;
+    const d = date || r[COL['적용날짜']] || r[COL['날짜']];
+    const m = memo !== null ? memo : r[COL['담임메모']];
+    // 유형(담임)·사유(담임)·적용날짜·담임메모는 붙어 있는 4칸
+    log.getRange(i + 2, COL['유형(담임)'] + 1, 1, 4).setValues([[type, reason, txt_(d), txt_(m)]]);
+    n++;
   });
   return n;
 }
@@ -228,25 +249,46 @@ function logRows_() {
   return { log, rows: log.getRange(2, 1, log.getLastRow() - 1, LOG_HEADERS.length).getDisplayValues() };
 }
 
-function listItems_(date) {
-  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : todayStr_();
-  return logRows_().rows
-    .filter(r => r[COL['날짜']] === d)
-    .map(r => ({
-      id: r[COL['ID']],
-      time: r[COL['수신시각']].slice(11, 16),
-      app: r[COL['앱']],
-      no: Number(r[COL['번호']]),
-      name: r[COL['이름']],
-      rel: r[COL['관계']],
-      type: r[COL['유형(추정)']],
-      reason: r[COL['사유(추정)']],
-      memo: r[COL['메모']],
-      text: r[COL['원문']],
-      checked: String(r[COL['담임확인']]).toUpperCase() === 'TRUE',
-      ctype: r[COL['유형(담임)']] || '',     // 담임 확정값 (비어 있으면 추정값 사용)
-      creason: r[COL['사유(담임)']] || '',
-    }));
+function appliedDate_(r) { return r[COL['적용날짜']] || r[COL['날짜']]; }
+
+/**
+ * d 날짜에 '적용되는' 메시지 목록 + 예고 목록
+ *  items  : 적용날짜가 d인 메시지 (출결 여부 att 포함 → 패널이 출결 카드 / 기타 대화로 나눔)
+ *  notices: d에 받았지만 다른 날짜로 적용되는 출결 메시지 (예: 오늘 받은 '내일 결석')
+ */
+function listItems_(d) {
+  const items = [];
+  const notices = [];
+  logRows_().rows.forEach(r => {
+    const applied = appliedDate_(r);
+    const ctype = r[COL['유형(담임)']] || '';
+    const att = isAttendance_(r[COL['유형(추정)']], r[COL['사유(추정)']], ctype);
+    if (applied === d) {
+      items.push({
+        id: r[COL['ID']],
+        time: r[COL['수신시각']].slice(11, 16),
+        recvDate: r[COL['날짜']],
+        date: applied,
+        app: r[COL['앱']],
+        no: Number(r[COL['번호']]),
+        name: r[COL['이름']],
+        rel: r[COL['관계']],
+        type: r[COL['유형(추정)']],
+        reason: r[COL['사유(추정)']],
+        memo: r[COL['메모']],
+        text: r[COL['원문']],
+        checked: String(r[COL['담임확인']]).toUpperCase() === 'TRUE',
+        ctype: ctype,                         // 담임 확정값 (비어 있으면 추정값 사용)
+        creason: r[COL['사유(담임)']] || '',
+        cmemo: r[COL['담임메모']] || '',
+        att: att,
+      });
+    } else if (r[COL['날짜']] === d && att) {
+      notices.push({ no: Number(r[COL['번호']]), name: r[COL['이름']], date: applied,
+        type: ctype || r[COL['유형(추정)']], time: r[COL['수신시각']].slice(11, 16) });
+    }
+  });
+  return { items, notices };
 }
 
 function checkItems_(ids, value) {
@@ -281,27 +323,81 @@ function classify_(text) {
   else if (/체험학습/.test(t)) reason = '체험학습(추정)';
 
   const memo = [];
-  if (/내일/.test(t)) memo.push('내일 언급');
-  if (/모레|다음\s*주/.test(t)) memo.push('이후 날짜 언급');
   if (reason.startsWith('질병')) memo.push('증빙 확인');
-
   return { type, reason, memo: memo.join(', ') };
 }
 
-/* ---------- 오늘현황 ---------- */
+/* ---------- 적용 날짜 추정 ---------- */
+
+const WEEKDAYS = '일월화수목금토';
+
+function addDays_(ds, n) {
+  const [y, m, d] = ds.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d + n));
+  return t.toISOString().slice(0, 10);
+}
+function weekday_(ds) {
+  const [y, m, d] = ds.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+}
+
+/**
+ * 메시지 속 날짜 표현으로 '적용할 날짜'를 추정한다. 못 찾으면 받은 날짜.
+ *  - 'M월 D일' → 그 날짜 (이미 30일 넘게 지났으면 내년)
+ *  - '다음 주 X요일' → 다음 주의 그 요일 / 'X요일' → 오늘 포함 가장 가까운 그 요일
+ *  - '모레' → +2, '내일' → +1 ('오늘'도 같이 있으면 오늘로 두고 확인 표시)
+ * note: 패널 메모에 붙는 확인 문구
+ */
+function detectTargetDate_(text, recvDate) {
+  const t = String(text).replace(/\s+/g, '');
+  let date = recvDate;
+  let note = '';
+
+  const md = t.match(/(\d{1,2})월(\d{1,2})일/);
+  const wk = t.match(/(다음주|담주|다음)?([월화수목금토일])요일/);
+  if (md) {
+    const y = Number(recvDate.slice(0, 4));
+    const cand = `${y}-${('0' + md[1]).slice(-2)}-${('0' + md[2]).slice(-2)}`;
+    date = cand < addDays_(recvDate, -30) ? `${y + 1}${cand.slice(4)}` : cand;
+    note = '날짜 언급';
+  } else if (wk) {
+    const target = WEEKDAYS.indexOf(wk[2]);
+    const today = weekday_(recvDate);
+    let diff = (target - today + 7) % 7;
+    if (wk[1]) {
+      // 다음 주 X요일: 이번 주(월요일 시작) 다음 주의 그 요일
+      const toNextMon = ((8 - today) % 7) || 7;
+      diff = toNextMon + ((target + 6) % 7);
+    }
+    date = addDays_(recvDate, diff);
+    note = '요일 언급';
+  } else if (/모레/.test(t)) {
+    date = addDays_(recvDate, 2);
+    note = '모레 언급';
+  } else if (/내일/.test(t)) {
+    if (/오늘/.test(t)) {
+      note = '오늘·내일 언급 — 날짜 확인';
+    } else {
+      date = addDays_(recvDate, 1);
+      note = '내일 언급';
+    }
+  }
+  const w = weekday_(date);
+  if (date !== recvDate && (w === 0 || w === 6)) note += ' (주말 — 날짜 확인)';
+  return { date, note };
+}
+
+/* ---------- 오늘현황 시트 (출결 관련만) ---------- */
 
 function refreshToday() {
   const ss = SpreadsheetApp.getActive();
-  const log = ensureSheet_(ss, CONFIG.SHEET_LOG, LOG_HEADERS);
   const out = ensureSheet_(ss, CONFIG.SHEET_TODAY, []);
-  const today = Utilities.formatDate(new Date(), CONFIG.TZ, 'yyyy-MM-dd');
-
-  const data = log.getLastRow() > 1
-    ? log.getRange(2, 1, log.getLastRow() - 1, LOG_HEADERS.length).getDisplayValues()
-    : [];
+  const today = todayStr_();
+  const rows = logRows_().rows.filter(r => appliedDate_(r) === today &&
+    isAttendance_(r[COL['유형(추정)']], r[COL['사유(추정)']], r[COL['유형(담임)']]));
 
   const byStudent = {};
-  data.filter(r => r[COL['날짜']] === today).forEach(r => {
+  rows.forEach(r => {
     const k = r[COL['번호']] + '|' + r[COL['이름']];
     (byStudent[k] = byStudent[k] || []).push(r);
   });
@@ -310,26 +406,26 @@ function refreshToday() {
   out.appendRow([today + ' 출결 연락 현황', '', '', '', '', '마지막 갱신: ' +
     Utilities.formatDate(new Date(), CONFIG.TZ, 'HH:mm')]);
   out.getRange(1, 1).setFontWeight('bold').setFontSize(13);
-  out.appendRow(['번호', '이름', '유형(추정)', '사유(추정)', '메모', '메시지 (시각 · 보낸 사람)']);
+  out.appendRow(['번호', '이름', '유형', '사유', '메모', '메시지 (받은 날 시각 · 보낸 사람)']);
   out.getRange(2, 1, 1, 6).setFontWeight('bold').setBackground('#eeeeee');
 
   const keys = Object.keys(byStudent).sort((a, b) => Number(a.split('|')[0]) - Number(b.split('|')[0]));
-  if (!keys.length) out.appendRow(['', '오늘 수신된 연락 없음']);
+  if (!keys.length) out.appendRow(['', '오늘 출결 연락 없음']);
 
   keys.forEach(k => {
-    const rows = byStudent[k];
+    const rs = byStudent[k];
     const [no, name] = k.split('|');
     // 담임이 지정한 값이 하나라도 있으면 그것만, 없으면 추정값 사용
-    const confirmed = rows.filter(r => r[COL['유형(담임)']]);
+    const confirmed = rs.filter(r => r[COL['유형(담임)']]);
     const types = confirmed.length
       ? uniq_(confirmed.map(r => r[COL['유형(담임)']] + '✔'))
-      : uniq_(rows.map(r => r[COL['유형(추정)']]).filter(v => v !== '확인필요'));
+      : uniq_(rs.map(r => r[COL['유형(추정)']]).filter(v => v !== '확인필요'));
     const reasons = confirmed.length
       ? uniq_(confirmed.map(r => r[COL['사유(담임)']]).filter(Boolean))
-      : uniq_(rows.map(r => r[COL['사유(추정)']]).filter(Boolean));
-    const memos = uniq_(rows.flatMap(r => r[COL['메모']].split(', ')).filter(Boolean));
-    const msgs = rows.map(r => r[COL['수신시각']].slice(11, 16) + ' · ' + r[COL['관계']] + ': ' + r[COL['원문']]).join('\n');
-    out.appendRow([no, name, types.join(', ') || '확인필요', reasons.join(', '), memos.join(', '), msgs]);
+      : uniq_(rs.map(r => r[COL['사유(추정)']]).filter(Boolean));
+    const memos = uniq_(rs.flatMap(r => [r[COL['담임메모']]].concat(r[COL['메모']].split(', '))).filter(Boolean));
+    const msgs = rs.map(r => r[COL['수신시각']].slice(5, 16) + ' · ' + r[COL['관계']] + ': ' + r[COL['원문']]).join('\n');
+    out.appendRow([no, name, types.join(', ') || '확인필요', reasons.join(', '), memos.join(', '), txt_(msgs)]);
   });
 
   out.setColumnWidths(1, 2, 70);
@@ -347,7 +443,9 @@ function testInsert() {
   doPost({ parameter: { secret: CONFIG.SECRET, app: '테스트', sender: '#' + code + '01권민준어머니',
     text: '선생님 민준이가 밤새 열이 나서 오늘 병원 들렀다가 2교시쯤 늦게 등교하겠습니다.' } });
   doPost({ parameter: { secret: CONFIG.SECRET, app: '테스트', sender: code + '31황시윤',
-    text: '쌤 저 오늘 배가 너무 아파서 조퇴해야 할 것 같아요' } });
+    text: '쌤 저 내일 배가 아파서 병원 가야 해서 결석할 것 같아요' } });
+  doPost({ parameter: { secret: CONFIG.SECRET, app: '테스트', sender: code + '31황시윤',
+    text: '넵 알겠습니다 ㅎㅎ' } });
   doPost({ parameter: { secret: CONFIG.SECRET, app: '테스트', sender: '김철수',
     text: '이 메시지는 우리반 형식이 아니므로 저장되면 안 됩니다.' } });
 }
@@ -357,10 +455,16 @@ function testInsert() {
 function ensureSheet_(ss, name, headers) {
   let sh = ss.getSheetByName(name);
   if (!sh) sh = ss.insertSheet(name);
-  if (headers.length && sh.getLastRow() === 0) {
+  if (!headers.length) return sh;
+  if (sh.getLastRow() === 0) {
     sh.appendRow(headers);
     sh.setFrozenRows(1);
     sh.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+  } else if (sh.getLastColumn() < headers.length) {
+    // 이전 버전으로 만든 시트: 뒤에 추가된 머리글만 채움 (기존 데이터는 그대로)
+    const start = sh.getLastColumn() + 1;
+    sh.getRange(1, start, 1, headers.length - start + 1)
+      .setValues([headers.slice(start - 1)]).setFontWeight('bold');
   }
   return sh;
 }

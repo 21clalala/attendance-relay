@@ -166,12 +166,15 @@ final class Relay {
                         p.addLog(stamp(now) + "  " + who + "  → " + t + " 저장");
                         Notifier.showSaved(ctx, o.optString("id"), who, t);
                     } else {
-                        p.addLog(stamp(ts) + "  " + who + "  → 전송됨");
-                        // 새로 저장된 메시지면 '유형 입력' 알림 띄우기
                         JSONObject j = r.json;
-                        if (j != null && j.optBoolean("stored") && !j.optString("id").isEmpty()) {
+                        // att=false: 출결과 무관해 보이는 대화 → 기록만 하고 알림은 띄우지 않음
+                        // (att 값이 없는 예전 Apps Script면 기존처럼 알림)
+                        boolean att = j == null || j.optBoolean("att", true);
+                        p.addLog(stamp(ts) + "  " + who + "  → 전송됨" + (att ? "" : " (기타 대화)"));
+                        if (att && j != null && j.optBoolean("stored") && !j.optString("id").isEmpty()) {
                             Notifier.showAsk(ctx, j.optString("id"), j.optInt("no"), j.optString("name"),
-                                    j.optString("rel"), j.optString("type"), o.optString("text"));
+                                    j.optString("rel"), j.optString("type"), o.optString("text"),
+                                    j.optString("date"), j.optString("recvDate"));
                         }
                     }
                 } else {
@@ -241,6 +244,9 @@ final class Relay {
             if (j != null && j.optBoolean("ok")) return new Result(true, "성공", j);
             if (j != null && "auth".equals(j.optString("error"))) return new Result(false, "비밀키 불일치", j);
             if (j != null) return new Result(false, j.optString("error", "오류"), j);
+            if (code == 200) return new Result(false, "응답이 JSON이 아님 — Apps Script를 '새 버전'으로 배포했는지 확인", null);
+            if (code == 401 || code == 403) return new Result(false, "HTTP " + code + " — 배포 '액세스: 모든 사용자', '실행: 나' 확인", null);
+            if (code == 404) return new Result(false, "HTTP 404 — 웹 앱 URL(…/exec) 확인", null);
             return new Result(false, "HTTP " + code, null);
         } catch (Exception e) {
             return new Result(false, "네트워크 오류", null);

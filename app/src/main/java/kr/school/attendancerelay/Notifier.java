@@ -38,10 +38,16 @@ final class Notifier {
         return 1000 + (id.hashCode() & 0x0fffffff);
     }
 
-    static void showAsk(Context ctx, String id, int no, String name, String rel, String guess, String text) {
+    static void showAsk(Context ctx, String id, int no, String name, String rel, String guess, String text,
+                        String date, String recvDate) {
         ensureChannel(ctx);
         String who = no + "번 " + name + ("학생".equals(rel) ? "" : " (" + rel + ")");
         int nid = notifId(id);
+        // 받은 날과 다른 날짜로 추정되면(예: '내일 결석') 제목에 적용 날짜 표시
+        String when = "";
+        if (date != null && date.length() == 10 && !date.equals(recvDate)) {
+            when = " · " + Integer.parseInt(date.substring(5, 7)) + "/" + Integer.parseInt(date.substring(8, 10)) + " 예정";
+        }
 
         Intent open = new Intent(ctx, ClassifyActivity.class)
                 .putExtra(EXTRA_ID, id).putExtra(EXTRA_WHO, who).putExtra(EXTRA_TEXT, text)
@@ -54,9 +60,10 @@ final class Notifier {
 
         Notification.Builder b = new Notification.Builder(ctx, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_menu_agenda)
-                .setContentTitle(who + " · " + guessLine)
+                .setContentTitle(who + " · " + guessLine + when)
                 .setContentText(text)
-                .setStyle(new Notification.BigTextStyle().bigText(text + "\n\n누르면 사유까지 입력할 수 있습니다."))
+                .setStyle(new Notification.BigTextStyle().bigText(text
+                        + "\n\n누르면 사유까지 입력할 수 있습니다. 날짜·메모는 엣지 패널에서 고칠 수 있습니다."))
                 .setContentIntent(openPi)
                 .setAutoCancel(true)
                 .setCategory(Notification.CATEGORY_REMINDER)
