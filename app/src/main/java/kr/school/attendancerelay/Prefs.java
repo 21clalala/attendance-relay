@@ -77,7 +77,8 @@ final class Prefs {
 
     JSONArray queue() { return readArray(K_QUEUE); }
 
-    void setQueue(JSONArray a) { sp.edit().putString(K_QUEUE, a.toString()).apply(); }
+    /** 디스크에 즉시 기록 (프로세스가 바로 종료돼도 대기열이 남도록) */
+    void setQueueNow(JSONArray a) { sp.edit().putString(K_QUEUE, a.toString()).commit(); }
 
     /* ---- 중복 방지: 메시지 해시만 저장, 내용은 저장하지 않음 ---- */
 

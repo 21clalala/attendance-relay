@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 필요한 권한은 인터넷 하나뿐. 연락처·문자·위치 권한 없음 -->
+    <!-- 연락처·문자·위치 권한 없음 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- '유형 입력' 알림을 띄우기 위한 권한 (안드로이드 13 이상) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
@@ -17,6 +19,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 알림을 누르면 뜨는 유형·사유 입력창 -->
+        <activity
+            android:name=".ClassifyActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.DeviceDefault.Light.Dialog" />
+
+        <!-- 알림의 결석/지각/조퇴 버튼 -->
+        <receiver
+            android:name=".ActionReceiver"
+            android:exported="false" />
 
         <service
             android:name=".RelayService"

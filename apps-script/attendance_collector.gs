@@ -27,7 +27,9 @@ const CONFIG = {
 };
 
 const LOG_HEADERS = ['수신시각', '날짜', '앱', '발신자', '번호', '이름', '관계',
-  '유형(추정)', '사유(추정)', '메모', '원문', '담임확인'];
+  '유형(추정)', '사유(추정)', '메모', '원문', '담임확인', 'ID', '유형(담임)', '사유(담임)'];
+const TYPE_CHOICES = ['결석', '지각', '조퇴', '결과', '해당없음'];
+const REASON_CHOICES = ['질병', '미인정', '기타', '출석인정', ''];
 const COL = {}; LOG_HEADERS.forEach((h, i) => { COL[h] = i; });
 
 /* ---------- 초기 설정 ---------- */
@@ -57,6 +59,22 @@ function doPost(e) {
     if (p.secret !== CONFIG.SECRET) return json_({ ok: false, error: 'auth' });
     if (String(p.test || '') === '1') return json_({ ok: true, test: true }); // 앱의 '연결 테스트'
 
+    // 엣지 사이드 패널용
+    if (p.action === 'list') return json_({ ok: true, date: p.date || todayStr_(), items: listItems_(p.date) });
+    if (p.action === 'check') {
+      const n = checkItems_(String(p.ids || '').split(',').filter(Boolean), String(p.value) !== 'false');
+      return json_({ ok: true, updated: n });
+    }
+    // 담임이 폰 알림/입력창(또는 패널)에서 유형·사유를 직접 지정
+    if (p.action === 'settype') {
+      const type = String(p.type || '');
+      const reason = String(p.reason || '');
+      if (TYPE_CHOICES.indexOf(type) < 0 || REASON_CHOICES.indexOf(reason) < 0) return json_({ ok: false, error: 'bad type' });
+      const n = setTypeItems_(String(p.ids || '').split(',').filter(Boolean), type, reason);
+      refreshToday();
+      return json_({ ok: true, updated: n });
+    }
+
     const sender = String(p.sender || '').trim();
     const text = String(p.text || '').trim();
     const app = String(p.app || '').trim();
@@ -65,19 +83,21 @@ function doPost(e) {
     const who = parseSender_(sender);
     if (!who) return json_({ ok: true, stored: false }); // 우리반 형식이 아닌 발신자: 저장 안 함
 
-    // 같은 메시지가 두 번 오는 경우 대비 → 10분간 중복 제거
+    // 같은 메시지가 두 번 오는 경우(재전송 등) 대비 → 6시간 동안 중복 제거
     const cache = CacheService.getScriptCache();
-    const key = hash_(sender + '|' + text);
+    const key = hash_(sender + '|' + text + '|' + String(p.ts || ''));
     if (cache.get(key)) return json_({ ok: true, stored: false, dup: true });
-    cache.put(key, '1', 600);
+    cache.put(key, '1', 21600);
 
     // 폰이 오프라인이어서 늦게 전송된 경우에도 실제 받은 시각으로 기록
     const ts = Number(p.ts);
     const when = ts > 0 && Math.abs(Date.now() - ts) < 3 * 24 * 3600 * 1000 ? new Date(ts) : new Date();
 
-    storeMessage_(app, sender, text, who, when);
+    const saved = storeMessage_(app, sender, text, who, when);
     refreshToday();
-    return json_({ ok: true, stored: true });
+    // 폰 앱이 '유형 입력' 알림을 띄울 수 있도록 저장 결과를 돌려줌
+    return json_({ ok: true, stored: true, id: saved.id, no: who.no, name: who.name, rel: who.rel,
+      type: saved.type, reason: saved.reason });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
   } finally {
@@ -115,13 +135,76 @@ function storeMessage_(app, sender, text, who, when) {
   const log = ensureSheet_(ss, CONFIG.SHEET_LOG, LOG_HEADERS);
   const now = when || new Date();
   const c = classify_(text);
+  const id = Utilities.getUuid().slice(0, 8);
   log.appendRow([
     Utilities.formatDate(now, CONFIG.TZ, 'yyyy-MM-dd HH:mm:ss'),
     Utilities.formatDate(now, CONFIG.TZ, 'yyyy-MM-dd'),
     app, sender, who.no, who.name, who.rel,
-    c.type, c.reason, c.memo, text, false,
+    c.type, c.reason, c.memo, text, false, id, '', '',
   ]);
-  log.getRange(log.getLastRow(), LOG_HEADERS.length).insertCheckboxes();
+  log.getRange(log.getLastRow(), COL['담임확인'] + 1).insertCheckboxes();
+  return { id, type: c.type, reason: c.reason };
+}
+
+function setTypeItems_(ids, type, reason) {
+  if (!ids.length) return 0;
+  const { log, rows } = logRows_();
+  const want = new Set(ids);
+  let n = 0;
+  rows.forEach((r, i) => {
+    if (want.has(r[COL['ID']])) {
+      log.getRange(i + 2, COL['유형(담임)'] + 1, 1, 2).setValues([[type, reason]]);
+      n++;
+    }
+  });
+  return n;
+}
+
+/* ---------- 사이드 패널용 조회 / 체크 ---------- */
+
+function todayStr_() {
+  return Utilities.formatDate(new Date(), CONFIG.TZ, 'yyyy-MM-dd');
+}
+
+function logRows_() {
+  const log = ensureSheet_(SpreadsheetApp.getActive(), CONFIG.SHEET_LOG, LOG_HEADERS);
+  if (log.getLastRow() < 2) return { log, rows: [] };
+  return { log, rows: log.getRange(2, 1, log.getLastRow() - 1, LOG_HEADERS.length).getDisplayValues() };
+}
+
+function listItems_(date) {
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : todayStr_();
+  return logRows_().rows
+    .filter(r => r[COL['날짜']] === d)
+    .map(r => ({
+      id: r[COL['ID']],
+      time: r[COL['수신시각']].slice(11, 16),
+      app: r[COL['앱']],
+      no: Number(r[COL['번호']]),
+      name: r[COL['이름']],
+      rel: r[COL['관계']],
+      type: r[COL['유형(추정)']],
+      reason: r[COL['사유(추정)']],
+      memo: r[COL['메모']],
+      text: r[COL['원문']],
+      checked: String(r[COL['담임확인']]).toUpperCase() === 'TRUE',
+      ctype: r[COL['유형(담임)']] || '',     // 담임 확정값 (비어 있으면 추정값 사용)
+      creason: r[COL['사유(담임)']] || '',
+    }));
+}
+
+function checkItems_(ids, value) {
+  if (!ids.length) return 0;
+  const { log, rows } = logRows_();
+  const want = new Set(ids);
+  let n = 0;
+  rows.forEach((r, i) => {
+    if (want.has(r[COL['ID']])) {
+      log.getRange(i + 2, COL['담임확인'] + 1).setValue(value);
+      n++;
+    }
+  });
+  return n;
 }
 
 /* ---------- 키워드 분류 (추정일 뿐, 최종 판단은 담임) ---------- */
@@ -180,8 +263,14 @@ function refreshToday() {
   keys.forEach(k => {
     const rows = byStudent[k];
     const [no, name] = k.split('|');
-    const types = uniq_(rows.map(r => r[COL['유형(추정)']]).filter(v => v !== '확인필요'));
-    const reasons = uniq_(rows.map(r => r[COL['사유(추정)']]).filter(Boolean));
+    // 담임이 지정한 값이 하나라도 있으면 그것만, 없으면 추정값 사용
+    const confirmed = rows.filter(r => r[COL['유형(담임)']]);
+    const types = confirmed.length
+      ? uniq_(confirmed.map(r => r[COL['유형(담임)']] + '✔'))
+      : uniq_(rows.map(r => r[COL['유형(추정)']]).filter(v => v !== '확인필요'));
+    const reasons = confirmed.length
+      ? uniq_(confirmed.map(r => r[COL['사유(담임)']]).filter(Boolean))
+      : uniq_(rows.map(r => r[COL['사유(추정)']]).filter(Boolean));
     const memos = uniq_(rows.flatMap(r => r[COL['메모']].split(', ')).filter(Boolean));
     const msgs = rows.map(r => r[COL['수신시각']].slice(11, 16) + ' · ' + r[COL['관계']] + ': ' + r[COL['원문']]).join('\n');
     out.appendRow([no, name, types.join(', ') || '확인필요', reasons.join(', '), memos.join(', '), msgs]);

@@ -89,6 +89,19 @@ public class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root);
         setContentView(scroll);
+
+        // 안드로이드 13 이상: '유형 입력' 알림을 띄우려면 알림 권한 필요
+        Notifier.ensureChannel(this);
+        if (android.os.Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+        refresh();
     }
 
     @Override
@@ -105,6 +118,9 @@ public class MainActivity extends Activity {
         if (!access) s = "⚠ 알림 접근 권한이 꺼져 있습니다. ①을 눌러 켜 주세요.";
         else if (!p.isConfigured()) s = "⚠ 아래 설정을 입력하고 저장하세요.";
         else s = "✓ 작동 중: 패턴 " + p.prefix() + " 에 맞는 발신자만 전달";
+        if (access && p.isConfigured() && !Notifier.canPost(this)) {
+            s += "\n⚠ 알림이 꺼져 있어 유형 입력 알림이 뜨지 않습니다. (설정 → 애플리케이션 → 출결 알림 전달기 → 알림)";
+        }
         statusView.setText(s);
         statusView.setTextColor(access && p.isConfigured() ? Color.rgb(20, 120, 60) : Color.rgb(190, 60, 30));
         logView.setText(p.logText());
