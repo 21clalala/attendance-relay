@@ -51,6 +51,17 @@ function onOpen() {
 
 /* ---------- 수신 ---------- */
 
+const SCRIPT_VERSION = '2026-10-20b';
+
+/**
+ * 브라우저로 웹 앱 URL을 열었을 때 보이는 상태 확인용.
+ * 이 글이 보이면 '배포된 버전에 이 코드가 들어 있다'는 뜻. (비밀 정보는 내보내지 않음)
+ */
+function doGet() {
+  return json_({ ok: true, service: '출결 연락 수집기', version: SCRIPT_VERSION,
+    message: '정상 배포됨. 폰 앱과 엣지 패널에서 연결 테스트를 해 보세요.' });
+}
+
 function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
