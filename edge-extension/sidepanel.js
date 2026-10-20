@@ -225,7 +225,7 @@ function card(g) {
 
   const right = el('div', 'head-right');
   if (!editing) {
-    right.append(button(g.confirmed ? '수정' : '확정', 'edit-btn' + (g.confirmed ? '' : ' primary-soft'), () => openEditor(g, 'card')));
+    right.append(button(g.confirmed ? '수정' : '입력', 'edit-btn' + (g.confirmed ? '' : ' primary-soft'), () => openEditor(g, 'card')));
   }
   const chk = el('label', 'check');
   const box = document.createElement('input');
@@ -360,7 +360,7 @@ function editor(g) {
   f3.append(dl, ml);
 
   const actions = el('div', 'row');
-  const save = button(e.saving ? '저장 중…' : '확정', 'primary', () => saveEditor(g));
+  const save = button(e.saving ? '저장 중…' : '저장', 'primary', () => saveEditor(g));
   save.disabled = e.saving;
   actions.append(save);
   if (e.mode === 'card') actions.append(button('출결 아님', 'ghost danger', () => notAttendance(g)));
@@ -383,7 +383,7 @@ async function saveEditor(g) {
     const moved = e.date !== state.date;
     state.edit = null;
     await load(true);
-    flash(`${g.no}번 ${g.name} · ${e.type}${e.reason ? '·' + e.reason : ''} 확정` + (moved ? ` → ${shortLabel(e.date)}로 옮김` : ''));
+    flash(`${g.no}번 ${g.name} · ${e.type}${e.reason ? '·' + e.reason : ''} 저장` + (moved ? ` → ${shortLabel(e.date)}로 옮김` : ''));
   } catch (err) {
     e.saving = false;
     e.msg = '저장 실패: ' + err.message;
