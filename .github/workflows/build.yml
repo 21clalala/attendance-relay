@@ -2,7 +2,11 @@ name: Build APK
 
 on:
   push:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write   # 빌드한 APK를 apk 브랜치에 올리기 위해
 
 jobs:
   build:
@@ -26,3 +30,15 @@ jobs:
         with:
           name: attendance-relay-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      # 최신 APK를 'apk' 브랜치에 한 파일로 보관 (이전 버전은 덮어씀, 기록을 쌓지 않음)
+      - name: Publish APK to apk branch
+        run: |
+          mkdir -p /tmp/apk && cp app/build/outputs/apk/debug/app-debug.apk /tmp/apk/attendance-relay.apk
+          cd /tmp/apk
+          git init -q -b apk
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add attendance-relay.apk
+          git commit -q -m "APK from ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" apk
