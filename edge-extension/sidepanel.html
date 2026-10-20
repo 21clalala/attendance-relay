@@ -14,6 +14,7 @@
       <button id="next" class="icon" title="다음날">›</button>
     </div>
     <div class="tools">
+      <button id="addBtn" class="add-btn" title="놓친 연락 직접 추가">+ 직접 추가</button>
       <button id="refresh" class="icon" title="새로고침">↻</button>
       <button id="gear" class="icon" title="설정">⚙</button>
     </div>
@@ -29,6 +30,47 @@
     <div class="row">
       <button id="save" class="primary">저장하고 연결</button>
       <span id="settingsMsg" class="muted"></span>
+    </div>
+  </section>
+
+  <section id="addForm" class="add-form" hidden>
+    <div class="form-title">연락 직접 추가 <span id="addDate" class="muted"></span></div>
+
+    <div class="field-row">
+      <label class="no-field">번호
+        <input id="fNo" type="number" min="1" max="99" inputmode="numeric">
+      </label>
+      <label class="name-field">이름
+        <input id="fName" type="text" placeholder="번호를 입력하면 자동 표시">
+      </label>
+    </div>
+
+    <div class="field">보낸 사람
+      <div class="seg" id="fRel" data-value="학생">
+        <button data-v="학생" class="on">학생</button><button data-v="어머니">어머니</button><button data-v="아버지">아버지</button><button data-v="보호자">보호자</button>
+      </div>
+    </div>
+
+    <div class="field">유형
+      <div class="seg" id="fType" data-value="">
+        <button data-v="결석">결석</button><button data-v="지각">지각</button><button data-v="조퇴">조퇴</button><button data-v="결과">결과</button>
+      </div>
+    </div>
+
+    <div class="field">사유
+      <div class="seg" id="fReason" data-value="">
+        <button data-v="질병">질병</button><button data-v="미인정">미인정</button><button data-v="기타">기타</button><button data-v="출석인정">출석인정</button><button data-v="" class="on">미정</button>
+      </div>
+    </div>
+
+    <label class="field">메시지 (카톡에서 복사해 붙여넣기, 선택)
+      <textarea id="fText" rows="3"></textarea>
+    </label>
+
+    <div class="row">
+      <button id="fSubmit" class="primary">추가</button>
+      <button id="fCancel" class="ghost">취소</button>
+      <span id="fMsg" class="muted"></span>
     </div>
   </section>
 

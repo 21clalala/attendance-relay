@@ -4,7 +4,7 @@
 const TYPES = ['결석', '지각', '조퇴', '결과', '확인필요', '해당없음'];
 const REFRESH_MS = 60 * 1000;
 
-const state = { url: '', secret: '', date: todayStr(), items: [], loading: false, lastLoaded: null };
+const state = { url: '', secret: '', date: todayStr(), items: [], roster: {}, loading: false, lastLoaded: null };
 const $ = (id) => document.getElementById(id);
 
 /* ---------- 날짜 ---------- */
@@ -47,6 +47,7 @@ async function load(quiet) {
   try {
     const j = await api({ action: 'list', date: state.date });
     state.items = j.items || [];
+    state.roster = j.roster || state.roster;
     state.lastLoaded = new Date();
     setStatus('');
   } catch (e) {
@@ -111,6 +112,7 @@ function groups() {
 function render() {
   $('dateLabel').textContent = label(state.date);
   $('next').disabled = state.date >= todayStr();
+  $('addDate').textContent = '· ' + label(state.date); // 날짜를 넘기면 추가할 날짜도 따라감
 
   const gs = groups();
   const list = $('list');
@@ -220,6 +222,82 @@ $('save').addEventListener('click', async () => {
     load();
   } catch (e) {
     msg.textContent = '연결 실패: ' + e.message;
+  }
+});
+
+/* ---------- 직접 추가 ---------- */
+
+function segValue(id) { return $(id).dataset.value; }
+
+function setSeg(id, v) {
+  const seg = $(id);
+  seg.dataset.value = v;
+  for (const b of seg.querySelectorAll('button')) b.classList.toggle('on', b.dataset.v === v);
+}
+
+for (const id of ['fRel', 'fType', 'fReason']) {
+  $(id).addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (b) { setSeg(id, b.dataset.v); $('fMsg').textContent = ''; }
+  });
+}
+
+let nameTouched = false;
+$('fName').addEventListener('input', () => { nameTouched = true; });
+$('fNo').addEventListener('input', () => {
+  const known = state.roster[Number($('fNo').value)];
+  if (!nameTouched || !$('fName').value) {
+    $('fName').value = known || '';
+    nameTouched = false;
+  }
+  $('fName').placeholder = known ? '' : (/^\d+$/.test($('fNo').value) ? '처음 연락한 학생은 이름을 입력하세요' : '번호를 입력하면 자동 표시');
+});
+
+function openAddForm(show) {
+  $('addForm').hidden = !show;
+  $('addBtn').classList.toggle('on', show);
+  if (!show) return;
+  $('addDate').textContent = '· ' + label(state.date);
+  $('fMsg').textContent = '';
+  $('fNo').value = '';
+  $('fName').value = '';
+  $('fText').value = '';
+  nameTouched = false;
+  setSeg('fRel', '학생');
+  setSeg('fType', '');
+  setSeg('fReason', '');
+  $('fNo').focus();
+}
+
+$('addBtn').addEventListener('click', () => {
+  if (!state.url) { showSettings(true); return; }
+  openAddForm($('addForm').hidden);
+});
+$('fCancel').addEventListener('click', () => openAddForm(false));
+
+$('fSubmit').addEventListener('click', async () => {
+  const no = Number($('fNo').value);
+  const name = $('fName').value.trim();
+  const type = segValue('fType');
+  const msg = $('fMsg');
+  if (!(no >= 1 && no <= 99)) { msg.textContent = '번호를 입력하세요.'; $('fNo').focus(); return; }
+  if (!name) { msg.textContent = '이름을 입력하세요.'; $('fName').focus(); return; }
+  if (!type) { msg.textContent = '유형을 고르세요.'; return; }
+  $('fSubmit').disabled = true;
+  msg.textContent = '추가하는 중…';
+  try {
+    await api({
+      action: 'add', date: state.date, no: String(no), name, rel: segValue('fRel'),
+      type, reason: segValue('fReason'), text: $('fText').value,
+    });
+    openAddForm(false);
+    await load(true);
+    setStatus(`${no}번 ${name} · ${type} 추가했습니다.`);
+    setTimeout(() => setStatus(''), 3000);
+  } catch (e) {
+    msg.textContent = '추가 실패: ' + e.message;
+  } finally {
+    $('fSubmit').disabled = false;
   }
 });
 

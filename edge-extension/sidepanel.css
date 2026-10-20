@@ -120,6 +120,59 @@ button:disabled { opacity: .35; cursor: default; }
 }
 @media (prefers-color-scheme: dark) { .primary { color: #0d1117; } }
 
+/* 직접 추가 */
+.add-btn {
+  padding: 4px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  border: 1px solid var(--line);
+  margin-right: 2px;
+  white-space: nowrap;
+}
+.add-btn:hover, .add-btn.on { background: var(--msg-bg); }
+
+.add-form {
+  margin: 10px;
+  padding: 12px;
+  background: var(--card);
+  border: 1.5px solid var(--accent);
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+}
+.form-title { font-weight: 700; }
+.field, .add-form label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.field-row { display: grid; grid-template-columns: 72px 1fr; gap: 8px; }
+.add-form input, .add-form textarea {
+  font: inherit;
+  font-size: 14px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 8px;
+  width: 100%;
+  resize: vertical;
+}
+.add-form input:focus, .add-form textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.seg { display: flex; flex-wrap: wrap; gap: 4px; }
+.seg button {
+  padding: 5px 11px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+}
+.seg button:hover { border-color: var(--accent); }
+.seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+@media (prefers-color-scheme: dark) { .seg button.on { color: #0d1117; } }
+.ghost { padding: 7px 12px; border-radius: 6px; color: var(--muted); }
+.ghost:hover { background: var(--msg-bg); }
+
 /* 요약 */
 .summary {
   display: flex;

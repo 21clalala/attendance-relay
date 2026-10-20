@@ -60,7 +60,16 @@ function doPost(e) {
     if (String(p.test || '') === '1') return json_({ ok: true, test: true }); // 앱의 '연결 테스트'
 
     // 엣지 사이드 패널용
-    if (p.action === 'list') return json_({ ok: true, date: p.date || todayStr_(), items: listItems_(p.date) });
+    if (p.action === 'list') {
+      return json_({ ok: true, date: p.date || todayStr_(), items: listItems_(p.date), roster: roster_() });
+    }
+    // 패널에서 직접 추가 (PC 카톡에서 먼저 읽어 폰 알림이 안 온 경우 등)
+    if (p.action === 'add') {
+      const r = addManual_(p);
+      if (r.error) return json_({ ok: false, error: r.error });
+      refreshToday();
+      return json_({ ok: true, id: r.id });
+    }
     if (p.action === 'check') {
       const n = checkItems_(String(p.ids || '').split(',').filter(Boolean), String(p.value) !== 'false');
       return json_({ ok: true, updated: n });
@@ -137,13 +146,49 @@ function storeMessage_(app, sender, text, who, when) {
   const c = classify_(text);
   const id = Utilities.getUuid().slice(0, 8);
   log.appendRow([
-    Utilities.formatDate(now, CONFIG.TZ, 'yyyy-MM-dd HH:mm:ss'),
-    Utilities.formatDate(now, CONFIG.TZ, 'yyyy-MM-dd'),
-    app, sender, who.no, who.name, who.rel,
-    c.type, c.reason, c.memo, text, false, id, '', '',
+    txt_(Utilities.formatDate(now, CONFIG.TZ, 'yyyy-MM-dd HH:mm:ss')),
+    txt_(Utilities.formatDate(now, CONFIG.TZ, 'yyyy-MM-dd')),
+    app, txt_(sender), who.no, txt_(who.name), who.rel,
+    c.type, c.reason, c.memo, txt_(text), false, id, '', '',
   ]);
   log.getRange(log.getLastRow(), COL['담임확인'] + 1).insertCheckboxes();
   return { id, type: c.type, reason: c.reason };
+}
+
+/** 지금까지 받은 연락에서 번호 → 이름 목록을 만든다 (가장 최근 이름 우선) */
+function roster_() {
+  const map = {};
+  logRows_().rows.forEach(r => {
+    const no = Number(r[COL['번호']]);
+    if (no > 0 && r[COL['이름']]) map[no] = r[COL['이름']];
+  });
+  return map;
+}
+
+function addManual_(p) {
+  const no = Number(p.no);
+  if (!(no >= 1 && no <= 99 && Math.floor(no) === no)) return { error: '번호가 올바르지 않습니다' };
+  const name = String(p.name || '').trim() || roster_()[no] || '';
+  if (!name) return { error: '이름을 입력하세요' };
+  const rel = ['학생', '어머니', '아버지', '보호자'].indexOf(p.rel) >= 0 ? p.rel : '학생';
+  const type = String(p.type || '');
+  const reason = String(p.reason || '');
+  if (TYPE_CHOICES.indexOf(type) < 0 || REASON_CHOICES.indexOf(reason) < 0) return { error: '유형/사유가 올바르지 않습니다' };
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || '')) ? p.date : todayStr_();
+  const text = String(p.text || '').trim() || '(내용 없이 직접 추가)';
+  const time = Utilities.formatDate(new Date(), CONFIG.TZ, 'HH:mm:ss');
+  const c = classify_(text);
+  const id = Utilities.getUuid().slice(0, 8);
+  const code = CONFIG.CLASS_CODE + ('0' + no).slice(-2);
+  const sender = (rel === '학생' ? '' : '#') + code + name + (rel === '학생' ? '' : rel);
+
+  const log = ensureSheet_(SpreadsheetApp.getActive(), CONFIG.SHEET_LOG, LOG_HEADERS);
+  log.appendRow([
+    txt_(date + ' ' + time), txt_(date), '직접추가', txt_(sender), no, txt_(name), rel,
+    c.type, c.reason, c.memo, txt_(text), false, id, type, reason,
+  ]);
+  log.getRange(log.getLastRow(), COL['담임확인'] + 1).insertCheckboxes();
+  return { id };
 }
 
 function setTypeItems_(ids, type, reason) {
@@ -319,3 +364,11 @@ function hash_(s) {
 }
 
 function uniq_(a) { return Array.from(new Set(a)); }
+
+/**
+ * 시트에 '글자 그대로' 저장되게 함.
+ *  - 날짜처럼 생긴 문자열이 날짜로 자동 변환되는 것 방지 (그러면 날짜 필터가 깨짐)
+ *  - '='로 시작하는 메시지가 수식으로 실행되는 것 방지
+ * 맨 앞 작은따옴표는 시트에 보이지 않고, 읽을 때도 빠진 값으로 돌아옴.
+ */
+function txt_(s) { return "'" + String(s); }
