@@ -65,7 +65,7 @@ public class MainActivity extends Activity {
         prefixEdit = edit(p.prefix(), Prefs.DEFAULT_PATTERN, InputType.TYPE_CLASS_TEXT);
         root.addView(prefixEdit);
         root.addView(hint("연락처/카톡 이름이 이 패턴에 맞는 사람의 메시지만 전달합니다.\n"
-                + "기본값 ^#?26302\\d{2} = 2630201권민준, #2630201권민준어머니 형식 (26년 3학년 2반).\n"
+                + "기본값 ^(26302|#302)\\d{2} = 학생 2630201권민준, 학부모 #30201권민준어머니 (26년 3학년 2반).\n"
                 + "내년에는 연도·학년·반 숫자만 바꾸면 됩니다."));
 
         root.addView(section("감시할 앱"));

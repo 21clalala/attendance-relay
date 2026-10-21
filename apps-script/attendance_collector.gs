@@ -7,8 +7,8 @@
  *
  * 연락처 이름 규칙 (선생님 폰)
  *   학생   : 2630201권민준
- *   학부모 : #2630201권민준어머니 / #2630201권민준아버지
- *   (26=연도, 3=학년, 02=반, 01=번호)
+ *   학부모 : #30201권민준어머니 / #30201권민준아버지
+ *   (26=연도, 3=학년, 02=반, 01=번호 — 학부모는 연도 없이 #+학년+반+번호)
  *
  * 처음 설정
  *  1) 아래 SECRET 값을 아무도 모르는 긴 문자열로 바꾸기 (앱·패널에도 같은 값 입력)
@@ -28,7 +28,7 @@ const CONFIG = {
   TZ: 'Asia/Seoul',
 };
 
-const SCRIPT_VERSION = '2026-10-20c';
+const SCRIPT_VERSION = '2026-10-21a';
 
 // 열 순서를 바꾸지 말 것 (뒤에 추가만). 기존 시트는 setup/첫 실행 때 빠진 머리글을 자동으로 채움
 const LOG_HEADERS = ['수신시각', '날짜', '앱', '발신자', '번호', '이름', '관계',
@@ -147,8 +147,12 @@ function ids_(p) { return String(p.ids || '').split(',').filter(Boolean); }
  */
 function parseSender_(sender) {
   const s = String(sender).replace(/\s+/g, '');
-  const m = s.match(/^(#?)(\d{5})(\d{2})(.+)$/);
-  if (!m || m[2] !== CONFIG.CLASS_CODE) return null;
+  // 학생 2630201권민준 (26302+번호) / 학부모 #30201권민준어머니 (#302+번호)
+  const m = s.match(/^(#?)(\d+?)(\d{2})(\D.*)$/);
+  if (!m) return null;
+  const code = CONFIG.CLASS_CODE;              // '26302'
+  const ok = m[1] === '#' ? (m[2] === code.slice(2) || m[2] === code) : m[2] === code;
+  if (!ok) return null;
   const no = Number(m[3]);
   let name = m[4];
   let rel = m[1] === '#' ? '보호자' : '학생';
@@ -207,8 +211,8 @@ function addManual_(p) {
   const time = Utilities.formatDate(new Date(), CONFIG.TZ, 'HH:mm:ss');
   const c = classify_(text);
   const id = Utilities.getUuid().slice(0, 8);
-  const code = CONFIG.CLASS_CODE + ('0' + no).slice(-2);
-  const sender = (rel === '학생' ? '' : '#') + code + name + (rel === '학생' ? '' : rel);
+  const nn = ('0' + no).slice(-2);
+  const sender = rel === '학생' ? CONFIG.CLASS_CODE + nn + name : '#' + CONFIG.CLASS_CODE.slice(2) + nn + name + rel;
 
   const log = ensureSheet_(SpreadsheetApp.getActive(), CONFIG.SHEET_LOG, LOG_HEADERS);
   log.appendRow([
@@ -440,7 +444,7 @@ function refreshToday() {
 
 function testInsert() {
   const code = CONFIG.CLASS_CODE;
-  doPost({ parameter: { secret: CONFIG.SECRET, app: '테스트', sender: '#' + code + '01권민준어머니',
+  doPost({ parameter: { secret: CONFIG.SECRET, app: '테스트', sender: '#' + code.slice(2) + '01권민준어머니',
     text: '선생님 민준이가 밤새 열이 나서 오늘 병원 들렀다가 2교시쯤 늦게 등교하겠습니다.' } });
   doPost({ parameter: { secret: CONFIG.SECRET, app: '테스트', sender: code + '31황시윤',
     text: '쌤 저 내일 배가 아파서 병원 가야 해서 결석할 것 같아요' } });

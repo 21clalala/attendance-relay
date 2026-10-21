@@ -35,10 +35,10 @@ final class Prefs {
     String secret() { return sp.getString(K_SECRET, ""); }
     /**
      * 발신자 이름 패턴(정규식). 공백을 지운 이름에 적용.
-     * 기본값: 학생 2630201권민준 / 학부모 #2630201권민준어머니 형식
+     * 기본값: 학생 2630201권민준 / 학부모 #30201권민준어머니 형식
      * (26=연도, 3=학년, 02=반, 01=번호)
      */
-    static final String DEFAULT_PATTERN = "^#?26302\\d{2}";
+    static final String DEFAULT_PATTERN = "^(26302|#302)\\d{2}";
 
     String prefix() { return sp.getString(K_PREFIX, DEFAULT_PATTERN); }
 
