@@ -24,7 +24,7 @@ import java.util.Set;
 public class MainActivity extends Activity {
 
     private EditText urlEdit, secretEdit, prefixEdit;
-    private CheckBox cbSamsung, cbGoogle, cbKakao;
+    private CheckBox cbSamsung, cbGoogle, cbKakao, cbDiag;
     private TextView statusView, logView;
 
     @Override
@@ -77,10 +77,13 @@ public class MainActivity extends Activity {
         root.addView(cbGoogle);
         root.addView(cbKakao);
 
+        cbDiag = check("진단 기록: 문자 알림이 걸러지면 이유를 아래 기록에 남김 (발신자 이름만, 내용 없음)", p.diag());
+        root.addView(cbDiag);
+
         root.addView(button("저장", v -> save()));
         root.addView(button("연결 테스트", v -> test()));
 
-        root.addView(section("최근 전송 기록 (메시지 내용은 저장하지 않음)"));
+        root.addView(section("최근 전송 기록 (메시지 내용은 저장하지 않음, 최근 30줄)"));
         logView = new TextView(this);
         logView.setTextSize(13);
         logView.setTypeface(Typeface.MONOSPACE);
@@ -140,7 +143,7 @@ public class MainActivity extends Activity {
         if (cbSamsung.isChecked()) apps.add(Prefs.PKG_SAMSUNG_MSG);
         if (cbGoogle.isChecked()) apps.add(Prefs.PKG_GOOGLE_MSG);
         if (cbKakao.isChecked()) apps.add(Prefs.PKG_KAKAO);
-        new Prefs(this).save(url, secretEdit.getText().toString(), prefixEdit.getText().toString(), apps);
+        new Prefs(this).save(url, secretEdit.getText().toString(), prefixEdit.getText().toString(), apps, cbDiag.isChecked());
         toast("저장했습니다.");
         refresh();
     }

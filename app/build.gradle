@@ -10,8 +10,8 @@ android {
         applicationId 'kr.school.attendancerelay'
         minSdk 26
         targetSdk 35
-        versionCode 2
-        versionName '1.1'
+        versionCode 3
+        versionName '1.2'
     }
 
     // 고정 서명 키: 빌드할 때마다 키가 바뀌면 업데이트 시 앱을 지웠다 다시 깔아야 해서 저장소에 포함함.

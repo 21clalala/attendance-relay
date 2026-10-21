@@ -24,6 +24,7 @@ final class Prefs {
     private static final String K_QUEUE = "queue";
     private static final String K_SEEN = "seen";
     private static final String K_LOG = "log";
+    private static final String K_DIAG = "diag";
 
     private final SharedPreferences sp;
 
@@ -64,8 +65,12 @@ final class Prefs {
         }
     }
 
-    void save(String url, String secret, String prefix, Set<String> apps) {
+    /** 진단 기록: 문자 알림이 걸러졌을 때 발신자 이름만 이 폰의 전송 기록에 남김 */
+    boolean diag() { return sp.getBoolean(K_DIAG, true); }
+
+    void save(String url, String secret, String prefix, Set<String> apps, boolean diag) {
         sp.edit()
+                .putBoolean(K_DIAG, diag)
                 .putString(K_URL, url.trim())
                 .putString(K_SECRET, secret.trim())
                 .putString(K_PREFIX, prefix.trim())
