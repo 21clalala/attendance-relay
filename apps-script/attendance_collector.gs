@@ -11,7 +11,10 @@
  *   (26=연도, 3=학년, 02=반, 01=번호 — 학부모는 연도 없이 #+학년+반+번호)
  *
  * 처음 설정
- *  1) 아래 SECRET 값을 아무도 모르는 긴 문자열로 바꾸기 (앱·패널에도 같은 값 입력)
+ *  1) 비밀키: 편집기 왼쪽 톱니(프로젝트 설정) > 스크립트 속성 > 속성 추가
+ *     속성 이름 SECRET, 값은 아무도 모르는 긴 문자열 (앱·패널에도 같은 값 입력)
+ *     → 이렇게 하면 코드를 통째로 다시 붙여넣어도 비밀키를 다시 입력할 필요 없음
+ *     (스크립트 속성이 없으면 아래 CONFIG.SECRET을 사용)
  *  2) 편집기에서 setup 함수 실행(권한 승인)
  *  3) 배포 > 새 배포 > 유형: 웹 앱 / 실행: 나 / 액세스: 모든 사용자 → 웹 앱 URL 복사
  *  ※ 코드를 고친 뒤에는 배포 > 배포 관리 > 연필 > 버전: 새 버전 > 배포 (URL 유지)
@@ -21,14 +24,14 @@
  */
 
 const CONFIG = {
-  SECRET: 'CHANGE_ME_길고_랜덤한_문자열',
+  SECRET: 'CHANGE_ME_길고_랜덤한_문자열',   // 스크립트 속성 SECRET이 있으면 그쪽을 씀
   CLASS_CODE: '26302',          // 연도(26) + 학년(3) + 반(02). 내년엔 이 값만 바꾸기
   SHEET_LOG: '수신로그',
   SHEET_TODAY: '오늘현황',
   TZ: 'Asia/Seoul',
 };
 
-const SCRIPT_VERSION = '2026-10-21a';
+const SCRIPT_VERSION = '2026-10-21b';
 
 // 열 순서를 바꾸지 말 것 (뒤에 추가만). 기존 시트는 setup/첫 실행 때 빠진 머리글을 자동으로 채움
 const LOG_HEADERS = ['수신시각', '날짜', '앱', '발신자', '번호', '이름', '관계',
@@ -51,7 +54,7 @@ function setup() {
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('출결정리')
-    .addItem('오늘현황 새로고침', 'refreshToday')
+    .addItem('오늘현황 새로고침 (시트 보기용)', 'refreshToday')
     .addItem('테스트 메시지 넣기', 'testInsert')
     .addToUi();
 }
@@ -64,29 +67,53 @@ function doGet() {
     message: '정상 배포됨. 폰 앱과 엣지 패널에서 연결 테스트를 해 보세요.' });
 }
 
+/**
+ * 비밀키: '프로젝트 설정 > 스크립트 속성'의 SECRET을 우선 사용 (코드를 통째로 붙여넣어도 유지됨).
+ * 스크립트 속성이 없으면 위 CONFIG.SECRET 사용. 둘 다 기본값이면 모든 요청 거부.
+ */
+function secret_() {
+  let s = '';
+  try { s = PropertiesService.getScriptProperties().getProperty('SECRET') || ''; } catch (_) { /* 없음 */ }
+  s = s || CONFIG.SECRET;
+  return s.indexOf('CHANGE_ME') === 0 ? null : s;
+}
+
+/** 패널이 보고 있는 날짜(view)의 목록. 쓰기 요청 응답에 같이 담아 패널이 다시 조회하지 않게 함 */
+function listPayload_(view) {
+  const d = DATE_RE.test(String(view || '')) ? view : todayStr_();
+  const r = listItems_(d);
+  return { date: d, items: r.items, notices: r.notices, roster: roster_() };
+}
+
+function withList_(p, obj) {
+  if (p.view) Object.assign(obj, { list: listPayload_(p.view) });
+  return json_(obj);
+}
+
 function doPost(e) {
   const lock = LockService.getScriptLock();
   try {
-    lock.waitLock(20000);
     const p = readParams_(e);
-    if (p.secret !== CONFIG.SECRET) return json_({ ok: false, error: 'auth' });
+    const secret = secret_();
+    if (!secret || p.secret !== secret) return json_({ ok: false, error: 'auth' });
     if (String(p.test || '') === '1') return json_({ ok: true, test: true, version: SCRIPT_VERSION });
 
-    // ---- 엣지 사이드 패널용 ----
+    // ---- 조회: 읽기만 하므로 잠금 없이 (다른 저장이 오래 걸려도 기다리지 않음) ----
     if (p.action === 'list') {
-      const d = DATE_RE.test(String(p.date || '')) ? p.date : todayStr_();
-      const r = listItems_(d);
-      return json_({ ok: true, date: d, items: r.items, notices: r.notices, roster: roster_() });
+      return json_(Object.assign({ ok: true }, listPayload_(p.date)));
     }
+
+    // ---- 여기부터 쓰기: 동시에 시트를 고치지 않도록 잠금 ----
+    lock.waitLock(25000);
+
     if (p.action === 'add') {
       const r = addManual_(p);
       if (r.error) return json_({ ok: false, error: r.error });
-      refreshToday();
-      return json_({ ok: true, id: r.id });
+      return withList_(p, { ok: true, id: r.id });
     }
     if (p.action === 'check') {
       const n = checkItems_(ids_(p), String(p.value) !== 'false');
-      return json_({ ok: true, updated: n });
+      return withList_(p, { ok: true, updated: n });
     }
     // 담임 확정·수정 (패널, 폰 알림/입력창). date·memo는 보낸 경우에만 바꿈
     if (p.action === 'settype') {
@@ -95,8 +122,7 @@ function doPost(e) {
       if (TYPE_CHOICES.indexOf(type) < 0 || REASON_CHOICES.indexOf(reason) < 0) return json_({ ok: false, error: 'bad type' });
       if (p.date !== undefined && p.date !== '' && !DATE_RE.test(String(p.date))) return json_({ ok: false, error: 'bad date' });
       const n = setTypeItems_(ids_(p), type, reason, p.date || null, p.memo !== undefined ? String(p.memo) : null);
-      refreshToday();
-      return json_({ ok: true, updated: n });
+      return withList_(p, { ok: true, updated: n });
     }
 
     // ---- 폰 앱에서 온 메시지 ----
@@ -119,7 +145,6 @@ function doPost(e) {
     const when = ts > 0 && Math.abs(Date.now() - ts) < 3 * 24 * 3600 * 1000 ? new Date(ts) : new Date();
 
     const s = storeMessage_(app, sender, text, who, when);
-    refreshToday();
     // att=false(출결과 무관해 보임)면 폰 앱은 알림을 띄우지 않음
     return json_({ ok: true, stored: true, id: s.id, no: who.no, name: who.name, rel: who.rel,
       type: s.type, reason: s.reason, date: s.date, recvDate: s.recvDate, att: s.att });
@@ -162,20 +187,19 @@ function parseSender_(sender) {
 }
 
 function storeMessage_(app, sender, text, who, when) {
-  const log = ensureSheet_(SpreadsheetApp.getActive(), CONFIG.SHEET_LOG, LOG_HEADERS);
   const now = when || new Date();
+  // 폰 메시지 저장은 목록이 필요 없으므로 로그 전체를 읽지 않고 바로 추가 (가장 빠른 경로)
   const recvDate = Utilities.formatDate(now, CONFIG.TZ, 'yyyy-MM-dd');
   const c = classify_(text);
   const t = detectTargetDate_(text, recvDate);
   const memo = [c.memo, t.note].filter(Boolean).join(', ');
   const id = Utilities.getUuid().slice(0, 8);
-  log.appendRow([
+  appendLog_([
     txt_(Utilities.formatDate(now, CONFIG.TZ, 'yyyy-MM-dd HH:mm:ss')), txt_(recvDate),
     app, txt_(sender), who.no, txt_(who.name), who.rel,
     c.type, c.reason, memo, txt_(text), false, id, '', '',
     txt_(t.date), '',
   ]);
-  log.getRange(log.getLastRow(), COL['담임확인'] + 1).insertCheckboxes();
   return { id, type: c.type, reason: c.reason, date: t.date, recvDate,
     att: isAttendance_(c.type, c.reason, '') };
 }
@@ -214,13 +238,11 @@ function addManual_(p) {
   const nn = ('0' + no).slice(-2);
   const sender = rel === '학생' ? CONFIG.CLASS_CODE + nn + name : '#' + CONFIG.CLASS_CODE.slice(2) + nn + name + rel;
 
-  const log = ensureSheet_(SpreadsheetApp.getActive(), CONFIG.SHEET_LOG, LOG_HEADERS);
-  log.appendRow([
+  appendLog_([
     txt_(recvDate + ' ' + time), txt_(recvDate), '직접추가', txt_(sender), no, txt_(name), rel,
     c.type, c.reason, c.memo, txt_(text), false, id, type, reason,
     txt_(date), txt_(String(p.memo || '')),
   ]);
-  log.getRange(log.getLastRow(), COL['담임확인'] + 1).insertCheckboxes();
   return { id };
 }
 
@@ -236,6 +258,10 @@ function setTypeItems_(ids, type, reason, date, memo) {
     const m = memo !== null ? memo : r[COL['담임메모']];
     // 유형(담임)·사유(담임)·적용날짜·담임메모는 붙어 있는 4칸
     log.getRange(i + 2, COL['유형(담임)'] + 1, 1, 4).setValues([[type, reason, txt_(d), txt_(m)]]);
+    r[COL['유형(담임)']] = type;
+    r[COL['사유(담임)']] = reason;
+    r[COL['적용날짜']] = d;
+    r[COL['담임메모']] = m;
     n++;
   });
   return n;
@@ -247,10 +273,29 @@ function todayStr_() {
   return Utilities.formatDate(new Date(), CONFIG.TZ, 'yyyy-MM-dd');
 }
 
+/**
+ * 수신로그를 요청당 한 번만 읽는다 (시트 읽기가 가장 느린 작업이라).
+ * 같은 요청 안에서 쓰기를 하면 이 메모리 사본도 같이 고쳐서, 다시 읽지 않고 최신 목록을 돌려준다.
+ */
+let LOG_CACHE_ = null;
 function logRows_() {
+  if (LOG_CACHE_) return LOG_CACHE_;
   const log = ensureSheet_(SpreadsheetApp.getActive(), CONFIG.SHEET_LOG, LOG_HEADERS);
-  if (log.getLastRow() < 2) return { log, rows: [] };
-  return { log, rows: log.getRange(2, 1, log.getLastRow() - 1, LOG_HEADERS.length).getDisplayValues() };
+  const rows = log.getLastRow() < 2 ? []
+    : log.getRange(2, 1, log.getLastRow() - 1, LOG_HEADERS.length).getDisplayValues();
+  LOG_CACHE_ = { log, rows };
+  return LOG_CACHE_;
+}
+
+/** 새 행 추가. 이미 읽어 둔 사본이 있으면 거기에도 추가 (없으면 로그를 읽지 않음) */
+function appendLog_(values) {
+  const log = LOG_CACHE_ ? LOG_CACHE_.log : ensureSheet_(SpreadsheetApp.getActive(), CONFIG.SHEET_LOG, LOG_HEADERS);
+  log.appendRow(values);
+  log.getRange(log.getLastRow(), COL['담임확인'] + 1).insertCheckboxes();
+  if (LOG_CACHE_) {
+    LOG_CACHE_.rows.push(values.map(v => typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE')
+      : String(v).replace(/^'/, '')));
+  }
 }
 
 function appliedDate_(r) { return r[COL['적용날짜']] || r[COL['날짜']]; }
@@ -303,6 +348,7 @@ function checkItems_(ids, value) {
   rows.forEach((r, i) => {
     if (want.has(r[COL['ID']])) {
       log.getRange(i + 2, COL['담임확인'] + 1).setValue(value);
+      r[COL['담임확인']] = value ? 'TRUE' : 'FALSE';
       n++;
     }
   });
@@ -444,14 +490,15 @@ function refreshToday() {
 
 function testInsert() {
   const code = CONFIG.CLASS_CODE;
-  doPost({ parameter: { secret: CONFIG.SECRET, app: '테스트', sender: '#' + code.slice(2) + '01권민준어머니',
+  doPost({ parameter: { secret: secret_(), app: '테스트', sender: '#' + code.slice(2) + '01권민준어머니',
     text: '선생님 민준이가 밤새 열이 나서 오늘 병원 들렀다가 2교시쯤 늦게 등교하겠습니다.' } });
-  doPost({ parameter: { secret: CONFIG.SECRET, app: '테스트', sender: code + '31황시윤',
+  doPost({ parameter: { secret: secret_(), app: '테스트', sender: code + '31황시윤',
     text: '쌤 저 내일 배가 아파서 병원 가야 해서 결석할 것 같아요' } });
-  doPost({ parameter: { secret: CONFIG.SECRET, app: '테스트', sender: code + '31황시윤',
+  doPost({ parameter: { secret: secret_(), app: '테스트', sender: code + '31황시윤',
     text: '넵 알겠습니다 ㅎㅎ' } });
-  doPost({ parameter: { secret: CONFIG.SECRET, app: '테스트', sender: '김철수',
+  doPost({ parameter: { secret: secret_(), app: '테스트', sender: '김철수',
     text: '이 메시지는 우리반 형식이 아니므로 저장되면 안 됩니다.' } });
+  refreshToday();
 }
 
 /* ---------- 유틸 ---------- */

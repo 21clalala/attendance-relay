@@ -12,6 +12,8 @@ const state = {
   url: '', secret: '', date: todayStr(),
   items: [], notices: [], roster: {},
   loading: false, lastLoaded: null,
+  seq: 0,                // 화면을 고칠 때마다 +1 → 그 전에 시작된 조회 결과는 버림 (먼저 반영한 화면을 덮지 않게)
+  pending: 0,            // 진행 중인 저장 요청 수 (그동안 자동 갱신 멈춤)
   edit: null,            // 열려 있는 편집기 {key, mode:'card'|'other', type, reason, date, memo, saving}
   expanded: new Set(),   // '대화 더 보기'를 펼친 카드
   otherOpen: false,      // 기타 대화 펼침
@@ -59,22 +61,32 @@ async function api(params) {
   return j;
 }
 
+/** 서버가 준 목록을 화면에 적용 (그 사이 날짜를 넘겼거나 화면을 또 고쳤으면 무시) */
+function applyList(list, date, seq) {
+  if (!list || date !== state.date || seq !== state.seq) return false;
+  state.items = list.items || [];
+  state.notices = list.notices || [];
+  state.roster = list.roster || state.roster;
+  state.lastLoaded = new Date();
+  return true;
+}
+
 async function load(quiet) {
   if (!state.url || !state.secret) { showSettings(true); render(); return; }
-  if (state.loading) return;
-  state.loading = true;
+  // 같은 날짜를 이미 불러오는 중이면 생략 (다른 날짜로 넘겼으면 새로 불러옴)
+  if (state.loading === state.date) return;
+  const date = state.date;
+  const seq = state.seq;
+  state.loading = date;
   if (!quiet) setStatus('불러오는 중…');
   try {
-    const j = await api({ action: 'list', date: state.date });
-    state.items = j.items || [];
-    state.notices = j.notices || [];
-    state.roster = j.roster || state.roster;
-    state.lastLoaded = new Date();
+    const j = await api({ action: 'list', date });
+    applyList(j, date, seq);
     if (!quiet) setStatus('');
   } catch (e) {
     setStatus('불러오지 못했습니다: ' + e.message, true);
   } finally {
-    state.loading = false;
+    if (state.loading === date) state.loading = false;
     render();
   }
 }
@@ -84,17 +96,40 @@ function flash(msg) {
   setTimeout(() => { if ($('status').textContent === msg) setStatus(''); }, 3500);
 }
 
-async function setChecked(g, value) {
-  const ids = g.att.map((i) => i.id);
-  g.att.forEach((i) => { i.checked = value; }); // 화면 먼저 반영
+/**
+ * 저장 공통: ① 화면을 먼저 고치고(mutate) ② 요청 한 번 보내고 ③ 응답에 담긴 최신 목록으로 맞춘다.
+ * 실패하면 고치기 전 화면으로 되돌리고 알린다.
+ */
+async function saveOptimistic(params, mutate, okMsg) {
+  const date = state.date;
+  const backup = JSON.stringify({ items: state.items, notices: state.notices });
+  mutate();
+  const seq = ++state.seq;
+  state.pending++;
   render();
+  if (okMsg) flash(okMsg);
   try {
-    await api({ action: 'check', ids: ids.join(','), value: String(value) });
-  } catch (e) {
-    g.att.forEach((i) => { i.checked = !value; });
+    const j = await api({ ...params, view: date });
+    state.pending--;
+    applyList(j.list, date, seq);
     render();
-    setStatus('체크 저장 실패: ' + e.message, true);
+  } catch (err) {
+    state.pending--;
+    if (date === state.date && seq === state.seq) {
+      const b = JSON.parse(backup);
+      state.items = b.items;
+      state.notices = b.notices;
+      state.seq++;
+      render();
+    }
+    setStatus('저장 실패(되돌림): ' + err.message, true);
   }
+}
+
+function setChecked(g, value) {
+  const ids = g.att.map((i) => i.id);
+  saveOptimistic({ action: 'check', ids: ids.join(','), value: String(value) },
+    () => { for (const it of state.items) if (ids.includes(it.id)) it.checked = value; });
 }
 
 /* ---------- 묶기 ---------- */
@@ -371,40 +406,40 @@ function editor(g) {
   return box;
 }
 
-async function saveEditor(g) {
+function saveEditor(g) {
   const e = state.edit;
   if (!e.type) { e.msg = '유형을 고르세요.'; render(); return; }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(e.date)) { e.msg = '날짜를 확인하세요.'; render(); return; }
   const ids = (e.mode === 'card' ? g.att : g.chat).map((i) => i.id);
-  e.saving = true;
-  render();
-  try {
-    await api({ action: 'settype', ids: ids.join(','), type: e.type, reason: e.reason, date: e.date, memo: e.memo.trim() });
-    const moved = e.date !== state.date;
-    state.edit = null;
-    await load(true);
-    flash(`${g.no}번 ${g.name} · ${e.type}${e.reason ? '·' + e.reason : ''} 저장` + (moved ? ` → ${shortLabel(e.date)}로 옮김` : ''));
-  } catch (err) {
-    e.saving = false;
-    e.msg = '저장 실패: ' + err.message;
-    render();
-  }
+  const { type, reason, date } = e;
+  const memo = e.memo.trim();
+  const moved = date !== state.date;
+  state.edit = null;
+  saveOptimistic(
+    { action: 'settype', ids: ids.join(','), type, reason, date, memo },
+    () => {
+      const touched = state.items.filter((i) => ids.includes(i.id));
+      for (const it of touched) Object.assign(it, { ctype: type, creason: reason, cmemo: memo, date, att: true });
+      if (moved) {
+        // 다른 날짜로 옮기면 이 화면에서 빼고, 이 날 받은 연락이면 '넘어간 연락'에 한 줄 추가
+        state.items = state.items.filter((i) => !ids.includes(i.id));
+        if (touched.some((i) => i.recvDate === state.date)) {
+          state.notices.push({ no: g.no, name: g.name, date, type, time: touched[0].time });
+        }
+      }
+    },
+    `${g.no}번 ${g.name} · ${type}${reason ? '·' + reason : ''} 저장` + (moved ? ` → ${shortLabel(date)}로 옮김` : ''),
+  );
 }
 
-async function notAttendance(g) {
-  const e = state.edit;
-  e.saving = true;
-  render();
-  try {
-    await api({ action: 'settype', ids: g.att.map((i) => i.id).join(','), type: '해당없음', reason: '' });
-    state.edit = null;
-    await load(true);
-    flash(`${g.no}번 ${g.name} · 기타 대화로 옮겼습니다`);
-  } catch (err) {
-    e.saving = false;
-    e.msg = '저장 실패: ' + err.message;
-    render();
-  }
+function notAttendance(g) {
+  const ids = g.att.map((i) => i.id);
+  state.edit = null;
+  saveOptimistic(
+    { action: 'settype', ids: ids.join(','), type: '해당없음', reason: '' },
+    () => { for (const it of state.items) if (ids.includes(it.id)) Object.assign(it, { ctype: '해당없음', creason: '', att: false }); },
+    `${g.no}번 ${g.name} · 기타 대화로 옮겼습니다`,
+  );
 }
 
 /* ---------- 상단·설정 ---------- */
@@ -423,6 +458,7 @@ function showSettings(show) {
 }
 
 function goDate(d) {
+  state.seq++;          // 이전 날짜로 진행 중이던 결과가 와도 무시
   state.date = d;
   state.items = [];
   state.notices = [];
@@ -520,13 +556,17 @@ $('fSubmit').addEventListener('click', async () => {
   if (!type) { msg.textContent = '유형을 고르세요.'; return; }
   $('fSubmit').disabled = true;
   msg.textContent = '추가하는 중…';
+  const date = state.date;
+  const seq = ++state.seq;
   try {
-    await api({
-      action: 'add', date: state.date, no: String(no), name, rel: segValue('fRel'),
+    // 응답에 최신 목록이 같이 오므로 다시 조회하지 않음 (요청 1번)
+    const j = await api({
+      action: 'add', date, view: date, no: String(no), name, rel: segValue('fRel'),
       type, reason: segValue('fReason'), text: $('fText').value, memo: $('fMemo').value.trim(),
     });
     openAddForm(false);
-    await load(true);
+    if (!applyList(j.list, date, seq)) await load(true);
+    render();
     flash(`${no}번 ${name} · ${type} 추가했습니다.`);
   } catch (e) {
     msg.textContent = '추가 실패: ' + e.message;
@@ -539,7 +579,7 @@ $('fSubmit').addEventListener('click', async () => {
 
 // 패널이 보이고, 오늘·내일을 보고 있고, 편집 중이 아닐 때만 1분마다 갱신 (입력하던 내용이 날아가지 않게)
 function canAutoRefresh() {
-  return !document.hidden && !state.edit && $('addForm').hidden &&
+  return !document.hidden && !state.edit && !state.pending && $('addForm').hidden &&
     (state.date === todayStr() || state.date === shift(todayStr(), 1));
 }
 setInterval(() => { if (canAutoRefresh()) load(true); }, REFRESH_MS);
