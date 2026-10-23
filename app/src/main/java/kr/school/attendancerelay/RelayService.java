@@ -8,6 +8,7 @@ import android.os.Parcelable;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 
+import java.text.Normalizer;
 import java.util.regex.Pattern;
 
 /**
@@ -84,7 +85,7 @@ public class RelayService extends NotificationListenerService {
                 if (now - ts > MAX_MSG_AGE_MS) continue;
                 sent++;
                 if (p.markSeen(hash(pkg, sender, text, ts))) {
-                    Relay.enqueue(this, appLabel, sender, text, ts);
+                    Relay.enqueue(this, appLabel, clean(sender), text, ts);
                 }
             }
             // 메시지 안의 발신자 이름이 연락처 이름이 아닌 경우(일부 문자 앱): 1:1 대화면 알림 제목으로 다시 확인
@@ -96,7 +97,7 @@ public class RelayService extends NotificationListenerService {
                 if (now - ts <= MAX_MSG_AGE_MS) {
                     sent++;
                     if (p.markSeen(hash(pkg, head, text, ts))) {
-                        Relay.enqueue(this, appLabel, head, text, ts);
+                        Relay.enqueue(this, appLabel, clean(head), text, ts);
                     }
                 }
             }
@@ -109,7 +110,7 @@ public class RelayService extends NotificationListenerService {
                 sent++;
                 // 일반 알림은 10분 단위로 중복 판단 (같은 알림이 갱신되어 다시 오는 경우 대비)
                 if (p.markSeen(hash(pkg, title, text, ts / (10 * 60 * 1000L)))) {
-                    Relay.enqueue(this, appLabel, title, text, ts);
+                    Relay.enqueue(this, appLabel, clean(title), text, ts);
                 }
             }
         }
@@ -122,7 +123,7 @@ public class RelayService extends NotificationListenerService {
                     : (str(ex.getCharSequence(Notification.EXTRA_TEXT)).isEmpty() ? "내용 없음(미리보기 숨김?)" : "이름이 패턴과 다름");
             if (p.markSeen("diag|" + pkg + "|" + shown + "|" + (sbn.getPostTime() / 60000))) {
                 p.addLog(Relay.stamp(sbn.getPostTime()) + "  " + (shown.isEmpty() ? "(제목 없음)" : shown)
-                        + "  → 걸러짐 [" + appLabel + "] " + why);
+                        + "  → 걸러짐 [" + appLabel + "] " + why + oddChars(shown));
             }
         }
     }
@@ -138,9 +139,34 @@ public class RelayService extends NotificationListenerService {
         return str(m.getCharSequence("sender"));
     }
 
-    /** 공백을 지운 이름이 패턴과 맞는지 (정규식 find: '^'로 시작 위치 고정) */
+    /**
+     * 이름 정리: 전각 문자(＃, ０-９)를 보통 문자로 바꾸고(NFKC), 공백과 '보이지 않는 글자'를 모두 지움.
+     * 일부 문자 앱은 '#'·숫자로 시작하는 이름 앞뒤에 글자 방향 표시용 투명 문자(U+2068 등)를 붙여서,
+     * 눈에는 같아 보여도 패턴과 안 맞는 경우가 있음.
+     */
+    static String clean(String name) {
+        if (name == null) return "";
+        String t = Normalizer.normalize(name, Normalizer.Form.NFKC);
+        return t.replaceAll("[\\s\\p{Z}\\p{Cf}]", "");
+    }
+
+    /** 정리한 이름이 패턴과 맞는지 (정규식 find: '^'로 시작 위치 고정) */
     static boolean matches(String name, Pattern pattern) {
-        return !name.isEmpty() && pattern.matcher(name.replaceAll("\\s+", "")).find();
+        String c = clean(name);
+        return !c.isEmpty() && pattern.matcher(c).find();
+    }
+
+    /** 진단용: 이름에 보이지 않는 글자·전각 문자가 섞여 있으면 그 코드값을 보여 줌 */
+    private static String oddChars(String name) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < name.length() && sb.length() < 40; i++) {
+            char ch = name.charAt(i);
+            int type = Character.getType(ch);
+            if (type == Character.FORMAT || ch == '\uFF03' || (ch >= '\uFF10' && ch <= '\uFF19') || Character.isSpaceChar(ch)) {
+                sb.append(String.format(" U+%04X", (int) ch));
+            }
+        }
+        return sb.length() == 0 ? "" : " (특수문자:" + sb + ")";
     }
 
     private static String labelOf(String pkg) {

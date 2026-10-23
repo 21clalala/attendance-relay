@@ -31,7 +31,7 @@ const CONFIG = {
   TZ: 'Asia/Seoul',
 };
 
-const SCRIPT_VERSION = '2026-10-21b';
+const SCRIPT_VERSION = '2026-10-23a';
 
 // 열 순서를 바꾸지 말 것 (뒤에 추가만). 기존 시트는 setup/첫 실행 때 빠진 머리글을 자동으로 채움
 const LOG_HEADERS = ['수신시각', '날짜', '앱', '발신자', '번호', '이름', '관계',
@@ -171,7 +171,8 @@ function ids_(p) { return String(p.ids || '').split(',').filter(Boolean); }
  * '#2630201권민준어머니' → {no: 1, name: '권민준', rel: '어머니'}
  */
 function parseSender_(sender) {
-  const s = String(sender).replace(/\s+/g, '');
+  // 전각 문자(＃, ０-９) → 보통 문자, 공백·보이지 않는 글자(글자 방향 표시 등) 제거
+  const s = String(sender).normalize('NFKC').replace(/[\s\p{Z}\p{Cf}]/gu, '');
   // 학생 2630201권민준 (26302+번호) / 학부모 #30201권민준어머니 (#302+번호)
   const m = s.match(/^(#?)(\d+?)(\d{2})(\D.*)$/);
   if (!m) return null;
